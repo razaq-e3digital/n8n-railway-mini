@@ -1,0 +1,65 @@
+name: Claude PR review
+
+on:
+  pull_request:
+    # opened/reopened/ready_for_review review automatically.
+    # "labeled" lets you re-request a review on demand (see the job guard below).
+    types: [opened, reopened, ready_for_review, labeled]
+
+# Latest review wins if several events land close together.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    # Always review on open/reopen/ready. For a label event, only run when the
+    # label added is claude:review, so you can re-request a review at any time.
+    if: >
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'claude:review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--model claude-sonnet-4-6'
+          prompt: |
+            You are reviewing pull request #${{ github.event.pull_request.number }}
+            in this repository: "${{ github.event.pull_request.title }}".
+
+            Read the full diff for this pull request and assess:
+            - Correctness: does the change do what the PR claims, and if it references
+              an issue, does it actually address the root cause?
+            - Regressions and edge cases: inputs, error paths, null and empty cases,
+              concurrency, and failure modes.
+            - Security: input validation, injection, secrets handling, authorisation,
+              and any unsafe data handling.
+            - Tests: is there a test that would fail without the change and pass with
+              it, and does it cover the cases that matter?
+            - Scope: flag anything unrelated or out of scope for this PR.
+            - Consistency: follow the conventions already used in this codebase.
+
+            Then:
+            1. Leave specific inline comments on the lines that need attention, each
+               with a concrete, actionable suggestion.
+            2. Post one summary review comment. Its first line must read either
+               "Recommendation: APPROVE" or "Recommendation: REQUEST CHANGES".
+               Below that, group findings under Must fix, Should fix, and Nice to
+               have. Omit any group that is empty.
+            3. Do not approve, merge, or push commits. Leave the merge decision to a
+               human reviewer.
+
+            Write everything in British English. Do not use em-dashes. Keep the
+            review focused on what matters and do not pad it.
