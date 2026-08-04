@@ -1,0 +1,18 @@
+secrets.local
+*.local
+
+# Claude Code settings: settings.json has held live credentials, keep it local.
+.claude/
+
+# Working artefacts from workflow patching sessions. These embed live values
+# (Discord webhook URLs, n8n API keys, database and API passwords) that were
+# read straight from the running instance. This repository is public, so they
+# must be sanitised before any of them are tracked.
+add_webhook_trigger.py
+build_feeder_workflow.py
+job*.py
+patch_*.js
+patch_*.py
+workflow_lead_gen_*.json
+workflows/
+WorkspaceMy*.json
