@@ -15,4 +15,6 @@ patch_*.js
 patch_*.py
 workflow_lead_gen_*.json
 workflows/
+# ...but GitHub Actions workflows hold no secrets and must be tracked.
+!.github/workflows/
 WorkspaceMy*.json

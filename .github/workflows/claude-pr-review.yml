@@ -1,0 +1,119 @@
+name: Claude PR review
+
+on:
+  pull_request:
+    # opened/reopened/ready_for_review review automatically.
+    # "synchronize" re-reviews when new commits are pushed to an open PR; the
+    # concurrency group below cancels the stale run if pushes land in a burst.
+    # "labeled" lets you re-request a review on demand (see the job guard below).
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+
+# Latest review wins if several events land close together.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  # Required by anthropics/claude-code-action: it exchanges a GitHub OIDC
+  # token for a Claude GitHub App token, which fails without this.
+  id-token: write
+
+jobs:
+  review:
+    # Always review on open/reopen/ready. For a label event, only run when the
+    # label added is claude:review, so you can re-request a review at any time.
+    if: >
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'claude:review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The secrets context is not allowed in step `if` expressions, so map the
+      # secret into env and test it inside the script instead.
+      - name: Fail early if the review token is missing
+        env:
+          CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_TOKEN" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is not set. The review cannot run." >&2
+            echo "Generate one locally with 'claude setup-token' and add it under" >&2
+            echo "Settings > Secrets and variables > Actions as CLAUDE_CODE_OAUTH_TOKEN." >&2
+            exit 1
+          fi
+          echo "Review token is present."
+
+      - name: Claude review
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The posting tools must be allow-listed explicitly: the inline-comment
+          # MCP tool and the gh CLI are NOT in the default tool set, so without
+          # this Claude is denied permission to post and the review runs but
+          # never appears on the PR.
+          claude_args: |
+            --model claude-sonnet-4-6
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }}
+            ("${{ github.event.pull_request.title }}") in ${{ github.repository }}.
+            The PR branch is already checked out in the working directory.
+
+            Read the full diff and assess:
+            - Correctness: does the change do what the PR claims, and if it references
+              an issue, does it actually address the root cause?
+            - Regressions and edge cases: inputs, error paths, null and empty cases,
+              concurrency, and failure modes.
+            - Security: input validation, injection, secrets handling, authorisation,
+              and any unsafe data handling.
+            - Tests: is there a test that would fail without the change and pass with
+              it, and does it cover the cases that matter?
+            - Scope: flag anything unrelated or out of scope for this PR.
+            - Consistency: follow the conventions already used in this codebase.
+
+            Then post your review using GitHub comments only - do not submit review
+            text as a chat message:
+            1. For specific line issues, use mcp__github_inline_comment__create_inline_comment
+               (with confirmed: true), each with a concrete, actionable suggestion.
+            2. Post exactly one summary with `gh pr comment`. Its first line must read
+               either "Recommendation: APPROVE" or "Recommendation: REQUEST CHANGES".
+               Below that, group findings under Must fix, Should fix, and Nice to
+               have. Omit any group that is empty.
+            3. Do not approve, merge, or push commits. Leave the merge decision to a
+               human reviewer.
+
+            Write everything in British English. Do not use em-dashes. Keep the
+            review focused on what matters and do not pad it.
+
+      # The action exits 0 even when the Claude run itself errors (bad/expired
+      # token, model error), so a green check can hide a review that never ran.
+      # Inspect the FINAL result object in the execution log and fail only when
+      # that reports an error. Intermediate streamed events can legitimately
+      # contain is_error:true (e.g. a permission denial Claude recovers from),
+      # so grepping the whole file produces false failures - check the last
+      # type=="result" entry only.
+      - name: Verify the review actually ran
+        if: ${{ steps.claude.outputs.execution_file != '' }}
+        run: |
+          file="${{ steps.claude.outputs.execution_file }}"
+          if [ ! -f "$file" ]; then
+            echo "::error::Claude execution log not found at $file" >&2
+            exit 1
+          fi
+          final_error=$(jq -rs '[.. | objects | select(.type=="result") | .is_error] | last' "$file" 2>/dev/null)
+          if [ "$final_error" = "true" ]; then
+            echo "::error::Claude review reported is_error=true on its final result (no review produced)." >&2
+            echo "Most likely an invalid or expired CLAUDE_CODE_OAUTH_TOKEN. See the run log above." >&2
+            exit 1
+          fi
+          if [ "$final_error" != "false" ]; then
+            echo "::warning::Could not parse a final result from $file; not failing the job."
+          fi
+          echo "Claude review completed without errors."
