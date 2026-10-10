@@ -116,6 +116,17 @@ complete. Hand back to the human for those. You may script API-key style credent
 (OpenRouter, weather, the Discord webhook) via the n8n REST API if an n8n API key is
 provided.
 
+## Workflows maintained in this repo
+
+### Daily Briefing (Discord)
+The source for the Daily Briefing workflow lives in `briefing/`. Read `briefing/README.md`
+before changing it. In short:
+- Sources in the feed: `briefing/feeds.js`. Sections and layout: `briefing/compose.js`.
+  Summariser model: `briefing/build.js`. Summarising and scoring prompt: `briefing/select.js`.
+- Test with `node briefing/deploy.js test`, deploy with `node briefing/deploy.js prod`, then
+  commit. Do not leave changes only in the n8n editor: the next deploy overwrites them.
+- Credentials come from `secrets.local` (gitignored). Never copy a credential into `briefing/`.
+
 ## Done when
 A pinned n8n image (2.31.7) is deployed to Railway, Postgres is connected over the private
 network, the domain serves over https with correct webhook URLs, schedules are anchored to
