@@ -27,7 +27,7 @@ const sel = exec.data.resultData.runData['Select Items'][0].data.main[0][0].json
   const secs = Math.round((Date.now() - t0) / 1000);
   if (!r.ok || !j.choices) { console.log(`${model} [${reasoning}] HTTP ${r.status} after ${secs}s:`, JSON.stringify(j).slice(0, 400)); return; }
   const c = j.choices[0].message.content || '';
-  fs.writeFileSync(execPath.replace(/\.json$/, `.${model.replace(/[/:]/g, '_')}.${reasoning}.txt`), c);
+  fs.writeFileSync(execPath.replace(/\.json$/, `.${model.replace(/[^a-zA-Z0-9@_-]/g, '_')}.${reasoning}.txt`), c);
   let p = null; try { p = JSON.parse(c.replace(/```(json)?/g, '').match(/\{[\s\S]*\}/)[0]); } catch (e) {}
   console.log(`${model} [${reasoning}] served=${j.model} ${secs}s finish=${j.choices[0].finish_reason} tokens=${j.usage.prompt_tokens}/${j.usage.completion_tokens} json=${!!p} items=${p ? p.items.length : 0}/${sel.items.length}`);
   if (!p) return;

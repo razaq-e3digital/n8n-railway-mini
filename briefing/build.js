@@ -99,12 +99,12 @@ add({ name: 'Post to Discord', type: 'n8n-nodes-base.httpRequest', typeVersion: 
     options: { batching: { batch: { batchSize: 1, batchInterval: 1500 } } },
   } });
 
+const connections = {};
 const link = (from, to, output = 0) => {
   connections[from] = connections[from] || { main: [] };
   while (connections[from].main.length <= output) connections[from].main.push([]);
   connections[from].main[output].push({ node: to, type: 'main', index: 0 });
 };
-const connections = {};
 const linear = [trigger, 'Config', 'Weather', 'OpenRouter Models', 'Feed List', 'Read Feeds', 'Select Items', 'Summarise (Ultra)', 'Got Summary?'];
 for (let i = 0; i < linear.length - 1; i++) link(linear[i], linear[i + 1]);
 link('Got Summary?', 'Build Messages', 0);

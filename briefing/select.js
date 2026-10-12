@@ -21,6 +21,7 @@ const perFeed = feeds.map(() => []);
 const failed = new Set();
 const feedIndex = new Map(feeds.map((f, i) => [f.url, i]));
 const anyFromFeed = new Set();
+let unmatched = 0; // articles that could not be traced back to their feed
 
 const input = $input.all();
 for (let n = 0; n < input.length; n++) {
@@ -29,7 +30,7 @@ for (let n = 0; n < input.length; n++) {
   let idx = -1;
   try { idx = feedIndex.get($('Feed List').itemMatching(n).json.url); } catch (e) { idx = -1; }
   const f = feeds[idx];
-  if (!f) continue;
+  if (!f) { unmatched++; continue; }
   anyFromFeed.add(idx);
   const j = item.json || {};
   if (j.error) { failed.add(f.source); continue; }
@@ -56,8 +57,10 @@ for (let n = 0; n < input.length; n++) {
   });
 }
 
-// Feeds that returned nothing at all also count as failed, so we notice silent breakage.
-feeds.forEach((f, i) => { if (!anyFromFeed.has(i)) failed.add(f.source); });
+// Feeds that returned nothing at all also count as failed, so we notice silent breakage. If some
+// articles could not be traced to a feed, a feed with no traced articles may still have returned
+// data, so it is not reported as failed; the footer reports the untraced count instead.
+if (!unmatched) feeds.forEach((f, i) => { if (!anyFromFeed.has(i)) failed.add(f.source); });
 
 const items = [];
 const keys = new Set();
@@ -96,4 +99,4 @@ Write in British English. Never use em-dashes. Respond with JSON only, exactly t
 ITEMS:
 ${lines.join('\n')}`;
 
-return [{ json: { items, failed: [...failed], prompt } }];
+return [{ json: { items, failed: [...failed], unmatched, prompt } }];

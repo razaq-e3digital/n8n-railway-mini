@@ -7,7 +7,9 @@ const exec = JSON.parse(fs.readFileSync(execPath, 'utf8').replace(/^﻿/, ''));
 const rd = exec.data.resultData.runData;
 const out = name => rd[name][0].data.main[0];
 const store = {};
-const $now = { toFormat: () => 'Saturday 10 October 2026' };
+// Stub for n8n's Luxon $now: the date the saved execution ran, as compose.js formats it.
+const runDate = new Date(exec.startedAt || Date.now()).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/London' }).replace(',', '');
+const $now = { toFormat: () => runDate };
 const run = (file, input, extra = {}) => {
   const src = fs.readFileSync(path.join(__dirname, file), 'utf8');
   const $ = name => ({

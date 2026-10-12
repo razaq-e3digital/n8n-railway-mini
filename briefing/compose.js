@@ -147,6 +147,7 @@ const servedBy = String($input.first().json.model || '');
 if (!llmOk) notes.push('Summariser unavailable, showing feed excerpts');
 else if (servedBy && !/nemotron-3-ultra/.test(servedBy)) notes.push(`Summarised by fallback model ${servedBy}`);
 if ((prep.failed || []).length) notes.push('Feeds unavailable: ' + prep.failed.join(', '));
+if (prep.unmatched) notes.push(`${prep.unmatched} articles could not be matched to their feed and were skipped`);
 if (notes.length) embeds[embeds.length - 1].footer = { text: trunc(notes.join(' | '), 2000) };
 
 // ---- Remember what was considered so it is not repeated tomorrow. Keep 14 days of history.
