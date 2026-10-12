@@ -79,6 +79,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     if (ex && ex.id !== before && !['running', 'new', 'waiting'].includes(ex.status)) break;
   }
   await api('POST', `/workflows/${test.id}/deactivate`, {});
+  if (!ex || ex.id === before || ['running', 'new', 'waiting'].includes(ex.status)) {
+    console.error(`Timed out after 20 minutes waiting for the test run to finish. Check the executions of "${TEST_NAME}" in the n8n editor.`);
+    process.exit(1);
+  }
   const full = await api('GET', `/executions/${ex.id}?includeData=true`);
   fs.writeFileSync(path.join(tmp, 'last-test-execution.json'), JSON.stringify(full));
   const rd = full.data.resultData.runData;

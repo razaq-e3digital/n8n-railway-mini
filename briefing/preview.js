@@ -18,7 +18,9 @@ const run = (file, input, extra = {}) => {
   return new Function('$', '$input', '$now', '$getWorkflowStaticData', src)($, { all: () => input, first: () => input[0] }, $now, () => store);
 };
 const sel = run('select.js', out('Read Feeds'));
-const msgs = run('compose.js', out(['Summarise (Fallback)', 'Summarise (Ultra retry)', 'Summarise (Ultra)', 'Summarise (OpenRouter)'].find(n => rd[n])), { 'Select Items': sel });
+const summNode = ['Summarise (Fallback)', 'Summarise (Ultra retry)', 'Summarise (Ultra)', 'Summarise (OpenRouter)'].find(n => rd[n]);
+if (!summNode) throw new Error('preview.js: no summariser node in this execution. Did the run finish?');
+const msgs = run('compose.js', out(summNode), { 'Select Items': sel });
 fs.writeFileSync(path.join(outDir, 'payloads.json'), JSON.stringify(msgs.map(m => m.json.payload)));
 fs.writeFileSync(path.join(outDir, 'seen.json'), JSON.stringify({ global: { seen: store.seen } }));
 console.log('messages', msgs.length, 'seen', Object.keys(store.seen).length);

@@ -4,11 +4,22 @@ const path = require('path');
 const [, , livePath, outPath, mode] = process.argv;
 const live = JSON.parse(fs.readFileSync(livePath, 'utf8'));
 const code = f => fs.readFileSync(path.join(__dirname, f), 'utf8');
-const old = name => live.nodes.find(n => n.name === name);
+// Nodes copied from the live workflow. Fail loudly if one is missing or renamed, rather than
+// writing a broken workflow (a missing trigger would deploy cleanly and then never run).
+const old = name => {
+  const n = live.nodes.find(n => n.name === name);
+  if (!n) throw new Error(`build.js: live workflow has no node named '${name}'. Rename it back in the n8n editor or update this script.`);
+  return n;
+};
 
 const discordUrl = old('Post to Discord').parameters.url;
+if (!discordUrl) throw new Error("build.js: 'Post to Discord' in the live workflow has no URL.");
 // The OpenRouter credential is referenced by id, taken from whichever summariser node the live workflow has.
-const orCreds = live.nodes.find(n => n.credentials && n.credentials.httpHeaderAuth && /openrouter/i.test(n.parameters.url || '')).credentials;
+const orNode = live.nodes.find(n => n.credentials && n.credentials.httpHeaderAuth && /openrouter/i.test(n.parameters.url || ''));
+if (!orNode) throw new Error('build.js: no OpenRouter HTTP Request node with a header credential in the live workflow, so the credential id cannot be found.');
+const orCreds = orNode.credentials;
+const errorWorkflow = live.settings && live.settings.errorWorkflow;
+if (mode === 'prod' && !errorWorkflow) console.warn('build.js: warning, the live workflow has no error workflow set, so failures will not be reported.');
 
 // Summariser. Ultra (550B) is the strongest free model on OpenRouter as of Oct 2026 but is
 // sometimes overloaded, so OpenRouter falls through this list in order on provider errors.
@@ -108,7 +119,7 @@ const chain = nodes.map(n => n.name);
 const out = {
   name: mode === 'prod' ? live.name : 'Daily Briefing TEST (temporary)',
   nodes, connections,
-  settings: mode === 'prod' ? { executionOrder: 'v1', errorWorkflow: live.settings.errorWorkflow } : { executionOrder: 'v1' },
+  settings: mode === 'prod' && errorWorkflow ? { executionOrder: 'v1', errorWorkflow } : { executionOrder: 'v1' },
 };
 fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
 console.log(`wrote ${outPath}: ${chain.join(' -> ')}`);

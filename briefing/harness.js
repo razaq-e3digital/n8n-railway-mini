@@ -24,6 +24,8 @@ const s = sel[0].json;
 console.log('candidates', s.items.length, 'failed', s.failed);
 for (const it of s.items) console.log(it.id, it.section, it.source, '|', it.title.slice(0, 70), '|', it.link.slice(0, 60));
 if (process.argv[3] === 'compose') {
-  const msgs = run('compose.js', out(['Summarise (Fallback)', 'Summarise (Ultra retry)', 'Summarise (Ultra)', 'Summarise (OpenRouter)'].find(n => rd[n])), { 'Select Items': sel });
+  const summNode = ['Summarise (Fallback)', 'Summarise (Ultra retry)', 'Summarise (Ultra)', 'Summarise (OpenRouter)'].find(n => rd[n]);
+  if (!summNode) throw new Error('harness.js: no summariser node in this execution. Did the run finish?');
+  const msgs = run('compose.js', out(summNode), { 'Select Items': sel });
   for (const m of msgs) { const e = m.json.payload.embeds[0]; console.log('\n####', e.title, `[${e.description.length}]`, e.footer ? 'footer=' + e.footer.text : ''); console.log(e.description); }
 }
