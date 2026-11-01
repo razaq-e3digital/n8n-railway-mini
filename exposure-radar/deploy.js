@@ -61,11 +61,15 @@ return $input.all().map(item => {
     lines = [message]; // unknown events are posted as they are, so new events still show up
   } else {
     lines = ['Exposure Radar: ' + message];
-    if (event === 'prospect_failed') lines.push('Error: ' + (b.error ? String(b.error) : 'unknown'));
+    if (event === 'prospect_failed') {
+      const err = b.error == null || b.error === '' ? 'unknown' : typeof b.error === 'string' ? b.error : JSON.stringify(b.error);
+      lines.push('Error: ' + err);
+    }
     if (event === 'llm_cap_reached') lines.push('Reports will need a closer review today.');
   }
-  // Stop engine text from pinging the whole channel, and keep within Discord's 2000 character limit.
-  let content = lines.join('\\n').replace(/@(everyone|here)/g, '@\\u200b$1');
+  // Stop engine text from pinging anyone (@everyone, @here, <@user>, <@&role>), and keep within
+  // Discord's 2000 character limit.
+  let content = lines.join('\\n').replace(/@(everyone|here)/g, '@\\u200b$1').replace(/<@/g, '<@\\u200b');
   if (content.length > 2000) content = content.slice(0, 1997) + '...';
   return { json: { content, event } };
 });`;
