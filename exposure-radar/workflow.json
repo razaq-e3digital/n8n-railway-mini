@@ -21,7 +21,6 @@
       },
       "credentials": {
         "httpHeaderAuth": {
-          "id": "NOqtU3q9YN6TNKNa",
           "name": "Exposure Radar webhook secret"
         }
       }
@@ -55,11 +54,10 @@
       },
       "credentials": {
         "discordWebhookApi": {
-          "id": "lls2pgZAEBauPM3j",
           "name": "Exposure Radar Discord webhook"
         }
       },
-      "webhookId": "1b553ee6-3f00-4fa7-8113-2d351dab9d1a"
+      "webhookId": "b03f5597-b08d-4190-af92-c1d67e3d76cf"
     }
   ],
   "connections": {

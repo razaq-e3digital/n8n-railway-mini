@@ -9,7 +9,8 @@
 // webhook", created here from DISCORD_WEBHOOK in secrets.local if it does not exist yet.
 //
 // After deploying, the live workflow is exported (without static data or secret values) to
-// exposure-radar/workflow.json. Node 18+ is required for fetch.
+// exposure-radar/workflow.json, with credentials referenced by name only. Node 18+ is required
+// for fetch.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -18,6 +19,7 @@ const root = path.join(__dirname, '..');
 const secrets = Object.fromEntries(fs.readFileSync(path.join(root, 'secrets.local'), 'utf8')
   .split('\n').map(l => l.match(/^([A-Z_0-9]+)=(\S+)/)).filter(Boolean).map(m => [m[1], m[2]]));
 const BASE = secrets.N8N_BASE_URL;
+if (!BASE || !secrets.N8N_API_KEY) throw new Error('N8N_BASE_URL and N8N_API_KEY must be set in secrets.local.');
 const NAME = 'Exposure Radar notifications';
 const PATH = 'exposure-radar-events';
 const AUTH_CRED = 'Exposure Radar webhook secret';
@@ -32,6 +34,18 @@ const api = async (method, url, body) => {
   const text = await r.text();
   if (!r.ok) throw new Error(`${method} ${url} -> ${r.status} ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) : {};
+};
+
+// Lists every item of a collection, following n8n's cursor pages (each page holds at most 250).
+const listAll = async url => {
+  const items = [];
+  let cursor;
+  do {
+    const page = await api('GET', `${url}?limit=250${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    items.push(...(page.data || []));
+    cursor = page.nextCursor;
+  } while (cursor);
+  return items;
 };
 
 // Formats the Discord message. Runs inside the n8n Code node, so it is kept as a string.
@@ -57,7 +71,7 @@ return $input.all().map(item => {
 });`;
 
 (async () => {
-  const creds = (await api('GET', '/credentials?limit=250')).data || [];
+  const creds = await listAll('/credentials');
   const auth = creds.find(c => c.name === AUTH_CRED && c.type === 'httpHeaderAuth');
   if (!auth) throw new Error(`No Header Auth credential named "${AUTH_CRED}" on the instance.`);
   let discord = creds.find(c => c.name === DISCORD_CRED && c.type === 'discordWebhookApi');
@@ -68,10 +82,9 @@ return $input.all().map(item => {
     console.log(`Created credential "${DISCORD_CRED}" (${discord.id}).`);
   }
 
-  const list = (await api('GET', '/workflows?limit=250')).data || [];
-  const existing = list.find(w => w.name === NAME);
+  const existing = (await listAll('/workflows')).find(w => w.name === NAME);
   const webhookId = existing
-    ? ((await api('GET', `/workflows/${existing.id}`)).nodes.find(n => n.type === 'n8n-nodes-base.webhook') || {}).webhookId
+    ? (((await api('GET', `/workflows/${existing.id}`)).nodes || []).find(n => n.type === 'n8n-nodes-base.webhook') || {}).webhookId
     : undefined;
 
   const wf = {
@@ -103,20 +116,18 @@ return $input.all().map(item => {
     settings: { executionOrder: 'v1', errorWorkflow: ERROR_WORKFLOW },
   };
 
-  let id;
-  if (existing) {
-    id = existing.id;
-    await api('PUT', `/workflows/${id}`, wf);
-  } else {
-    id = (await api('POST', '/workflows', wf)).id;
-  }
-  const state = await api('GET', `/workflows/${id}`);
-  if (!state.active) await api('POST', `/workflows/${id}/activate`, {});
+  const saved = existing ? await api('PUT', `/workflows/${existing.id}`, wf) : await api('POST', '/workflows', wf);
+  const id = saved.id;
+  if (!saved.active) await api('POST', `/workflows/${id}/activate`, {});
 
+  // Export with credentials referenced by name only: the ids are specific to this instance, and
+  // this script looks the credentials up by name anyway.
   const live = await api('GET', `/workflows/${id}`);
   const exported = {
     name: live.name,
-    nodes: live.nodes,
+    nodes: live.nodes.map(n => n.credentials
+      ? { ...n, credentials: Object.fromEntries(Object.entries(n.credentials).map(([type, c]) => [type, { name: c.name }])) }
+      : n),
     connections: live.connections,
     settings: live.settings,
   };
