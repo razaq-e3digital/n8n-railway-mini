@@ -1,0 +1,91 @@
+{
+  "name": "Exposure Radar notifications",
+  "nodes": [
+    {
+      "id": "a3b1c6e0-0001-4e52-9a10-000000000001",
+      "name": "Exposure Radar Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "8bea0867-7edb-4e38-9563-d7cdf7c21f96",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "exposure-radar-events",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "responseCode": 200,
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Exposure Radar webhook secret"
+        }
+      }
+    },
+    {
+      "id": "a3b1c6e0-0002-4e52-9a10-000000000002",
+      "name": "Format Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const KNOWN = ['run_started', 'run_finished', 'prospect_failed', 'llm_cap_reached'];\nreturn $input.all().map(item => {\n  const b = item.json.body || {};\n  const event = typeof b.event === 'string' ? b.event : '';\n  const message = typeof b.message === 'string' && b.message.trim()\n    ? b.message.trim()\n    : 'Event \"' + (event || 'unknown') + '\" received with no message.';\n  let lines;\n  if (!KNOWN.includes(event)) {\n    lines = [message]; // unknown events are posted as they are, so new events still show up\n  } else {\n    lines = ['Exposure Radar: ' + message];\n    if (event === 'prospect_failed') {\n      const err = b.error == null || b.error === '' ? 'unknown' : typeof b.error === 'string' ? b.error : JSON.stringify(b.error);\n      lines.push('Error: ' + err);\n    }\n    if (event === 'llm_cap_reached') lines.push('Reports will need a closer review today.');\n  }\n  // Stop engine text from pinging anyone (@everyone, @here, <@user>, <@&role>), and keep within\n  // Discord's 2000 character limit.\n  let content = lines.join('\\n').replace(/@(everyone|here)/g, '@\\u200b$1').replace(/<@/g, '<@\\u200b');\n  if (content.length > 2000) content = content.slice(0, 1997) + '...';\n  return { json: { content } };\n});"
+      }
+    },
+    {
+      "id": "a3b1c6e0-0003-4e52-9a10-000000000003",
+      "name": "Post to Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "content": "={{ $json.content }}",
+        "options": {}
+      },
+      "credentials": {
+        "discordWebhookApi": {
+          "name": "Exposure Radar Discord webhook"
+        }
+      },
+      "webhookId": "b7ebef6e-d4ac-4354-ad99-ef489a3d2f64"
+    }
+  ],
+  "connections": {
+    "Exposure Radar Webhook": {
+      "main": [
+        [
+          {
+            "node": "Format Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Message": {
+      "main": [
+        [
+          {
+            "node": "Post to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "OMoMbuuxco4fVwWc"
+  }
+}
