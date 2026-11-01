@@ -35,7 +35,7 @@
         300
       ],
       "parameters": {
-        "jsCode": "const KNOWN = ['run_started', 'run_finished', 'prospect_failed', 'llm_cap_reached'];\nreturn $input.all().map(item => {\n  const b = item.json.body || {};\n  const event = typeof b.event === 'string' ? b.event : '';\n  const message = typeof b.message === 'string' && b.message.trim()\n    ? b.message.trim()\n    : 'Event \"' + (event || 'unknown') + '\" received with no message.';\n  let lines;\n  if (!KNOWN.includes(event)) {\n    lines = [message]; // unknown events are posted as they are, so new events still show up\n  } else {\n    lines = ['Exposure Radar: ' + message];\n    if (event === 'prospect_failed') {\n      const err = b.error == null || b.error === '' ? 'unknown' : typeof b.error === 'string' ? b.error : JSON.stringify(b.error);\n      lines.push('Error: ' + err);\n    }\n    if (event === 'llm_cap_reached') lines.push('Reports will need a closer review today.');\n  }\n  // Stop engine text from pinging anyone (@everyone, @here, <@user>, <@&role>), and keep within\n  // Discord's 2000 character limit.\n  let content = lines.join('\\n').replace(/@(everyone|here)/g, '@\\u200b$1').replace(/<@/g, '<@\\u200b');\n  if (content.length > 2000) content = content.slice(0, 1997) + '...';\n  return { json: { content, event } };\n});"
+        "jsCode": "const KNOWN = ['run_started', 'run_finished', 'prospect_failed', 'llm_cap_reached'];\nreturn $input.all().map(item => {\n  const b = item.json.body || {};\n  const event = typeof b.event === 'string' ? b.event : '';\n  const message = typeof b.message === 'string' && b.message.trim()\n    ? b.message.trim()\n    : 'Event \"' + (event || 'unknown') + '\" received with no message.';\n  let lines;\n  if (!KNOWN.includes(event)) {\n    lines = [message]; // unknown events are posted as they are, so new events still show up\n  } else {\n    lines = ['Exposure Radar: ' + message];\n    if (event === 'prospect_failed') {\n      const err = b.error == null || b.error === '' ? 'unknown' : typeof b.error === 'string' ? b.error : JSON.stringify(b.error);\n      lines.push('Error: ' + err);\n    }\n    if (event === 'llm_cap_reached') lines.push('Reports will need a closer review today.');\n  }\n  // Stop engine text from pinging anyone (@everyone, @here, <@user>, <@&role>), and keep within\n  // Discord's 2000 character limit.\n  let content = lines.join('\\n').replace(/@(everyone|here)/g, '@\\u200b$1').replace(/<@/g, '<@\\u200b');\n  if (content.length > 2000) content = content.slice(0, 1997) + '...';\n  return { json: { content } };\n});"
       }
     },
     {
@@ -57,7 +57,7 @@
           "name": "Exposure Radar Discord webhook"
         }
       },
-      "webhookId": "843e52dd-26f9-4e26-9b12-dcad822a0ef8"
+      "webhookId": "8846acc4-deba-4dcf-9f17-da978e1c72a0"
     }
   ],
   "connections": {

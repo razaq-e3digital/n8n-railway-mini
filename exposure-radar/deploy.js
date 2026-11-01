@@ -18,7 +18,7 @@ const crypto = require('crypto');
 const root = path.join(__dirname, '..');
 const secrets = Object.fromEntries(fs.readFileSync(path.join(root, 'secrets.local'), 'utf8')
   .split('\n').map(l => l.match(/^([A-Z_0-9]+)=(\S+)/)).filter(Boolean).map(m => [m[1], m[2]]));
-const BASE = secrets.N8N_BASE_URL;
+const BASE = (secrets.N8N_BASE_URL || '').replace(/\/+$/, '');
 if (!BASE || !secrets.N8N_API_KEY) throw new Error('N8N_BASE_URL and N8N_API_KEY must be set in secrets.local.');
 const NAME = 'Exposure Radar notifications';
 const PATH = 'exposure-radar-events';
@@ -71,7 +71,7 @@ return $input.all().map(item => {
   // Discord's 2000 character limit.
   let content = lines.join('\\n').replace(/@(everyone|here)/g, '@\\u200b$1').replace(/<@/g, '<@\\u200b');
   if (content.length > 2000) content = content.slice(0, 1997) + '...';
-  return { json: { content, event } };
+  return { json: { content } };
 });`;
 
 (async () => {
@@ -122,7 +122,7 @@ return $input.all().map(item => {
 
   const saved = existing ? await api('PUT', `/workflows/${existing.id}`, wf) : await api('POST', '/workflows', wf);
   const id = saved.id;
-  if (!saved.active) await api('POST', `/workflows/${id}/activate`, {});
+  if (!saved.active) await api('POST', `/workflows/${id}/activate`);
 
   // Export with credentials referenced by name only: the ids are specific to this instance, and
   // this script looks the credentials up by name anyway.
@@ -139,5 +139,5 @@ return $input.all().map(item => {
   fs.writeFileSync(out, JSON.stringify(exported, null, 2) + '\n');
   console.log(`${existing ? 'Updated' : 'Created'} "${live.name}" (${id}): active=${live.active}, ${live.nodes.length} nodes.`);
   console.log(`Exported to ${out}`);
-  console.log(`Production URL: ${BASE.replace(/\/$/, '')}/webhook/${PATH}`);
+  console.log(`Production URL: ${BASE}/webhook/${PATH}`);
 })().catch(e => { console.error(e.message); process.exit(1); });
