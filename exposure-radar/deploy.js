@@ -86,7 +86,11 @@ return $input.all().map(item => {
     console.log(`Created credential "${DISCORD_CRED}" (${discord.id}).`);
   }
 
-  const existing = (await listAll('/workflows')).find(w => w.name === NAME);
+  const workflows = await listAll('/workflows');
+  const existing = workflows.find(w => w.name === NAME);
+  // An inactive error workflow never fires, so only wire it up if it exists and is active.
+  const watchdog = workflows.find(w => w.id === ERROR_WORKFLOW && w.active);
+  if (!watchdog) console.warn(`Warning: error workflow ${ERROR_WORKFLOW} is missing or inactive on this instance, so failures will not be alerted. Set ERROR_WORKFLOW in this script.`);
   const webhookId = existing
     ? (((await api('GET', `/workflows/${existing.id}`)).nodes || []).find(n => n.type === 'n8n-nodes-base.webhook') || {}).webhookId
     : undefined;
@@ -117,7 +121,7 @@ return $input.all().map(item => {
       'Exposure Radar Webhook': { main: [[{ node: 'Format Message', type: 'main', index: 0 }]] },
       'Format Message': { main: [[{ node: 'Post to Discord', type: 'main', index: 0 }]] },
     },
-    settings: { executionOrder: 'v1', errorWorkflow: ERROR_WORKFLOW },
+    settings: { executionOrder: 'v1', ...(watchdog ? { errorWorkflow: ERROR_WORKFLOW } : {}) },
   };
 
   const saved = existing ? await api('PUT', `/workflows/${existing.id}`, wf) : await api('POST', '/workflows', wf);

@@ -127,6 +127,17 @@ before changing it. In short:
   commit. Do not leave changes only in the n8n editor: the next deploy overwrites them.
 - Credentials come from `secrets.local` (gitignored). Never copy a credential into `briefing/`.
 
+### Exposure Radar notifications (Discord)
+The source for this workflow lives in `exposure-radar/`. It receives run notifications from the
+Exposure Radar engine at `POST /webhook/exposure-radar-events` and posts them to Discord.
+- The message formatting is the Code node in `exposure-radar/deploy.js`. Deploy with
+  `node exposure-radar/deploy.js`: it creates or updates the workflow, activates it and
+  exports `exposure-radar/workflow.json`. Commit both files after a deploy.
+- The webhook uses the Header Auth credential "Exposure Radar webhook secret", which the human
+  manages. Never create, read or print it. Discord goes through the credential
+  "Exposure Radar Discord webhook". Both are referenced by name, never written into the JSON.
+- Do not send authenticated test events; the human tests from the engine.
+
 ## Done when
 A pinned n8n image (2.31.7) is deployed to Railway, Postgres is connected over the private
 network, the domain serves over https with correct webhook URLs, schedules are anchored to
