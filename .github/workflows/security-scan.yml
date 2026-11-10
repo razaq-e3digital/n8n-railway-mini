@@ -117,14 +117,15 @@ jobs:
 
             echo "### Semgrep"
             if [ -s semgrep.sarif ]; then
-              n=$(jq '[.runs[].results[]] | length' semgrep.sarif)
+              # Results suppressed in source (nosemgrep) are in the SARIF but do not fail the scan.
+              n=$(jq '[.runs[].results[] | select((.suppressions // []) | length == 0)] | length' semgrep.sarif)
               echo "$n finding(s) at severity ERROR."
               if [ "$n" -gt 0 ]; then
                 echo
                 echo "| Rule | Severity | Location |"
                 echo "|---|---|---|"
                 jq -r "$defs"'
-                  [.runs[].results[]][:20][]
+                  [.runs[].results[] | select((.suppressions // []) | length == 0)][:20][]
                   | "| \(.ruleId | esc) | \(.level // "error") | \(loc | esc) |"' semgrep.sarif
                 if [ "$n" -gt 20 ]; then echo; echo "Showing 20 of $n."; fi
               fi
@@ -139,14 +140,15 @@ jobs:
               echo "$n finding(s) at HIGH or CRITICAL (unfixed vulnerabilities excluded)."
               if [ "$n" -gt 0 ]; then
                 echo
-                echo "| Rule / CVE | Severity | Location | Fixed version |"
-                echo "|---|---|---|---|"
+                echo "| Rule / CVE | Package | Severity | Location | Fixed version |"
+                echo "|---|---|---|---|---|"
                 jq -r "$defs"'
+                  def field($name): (try (.message.text | capture($name + ": (?<v>[^\n]+)").v) catch null);
                   [.runs[].results[]][:20][]
-                  | (.message.text // "") as $m
-                  | ((try ($m | capture("Severity: (?<s>[A-Z]+)").s) catch null) // .level) as $sev
-                  | ((try ($m | capture("Fixed Version: (?<f>[^\n]+)").f) catch null) // "-") as $fix
-                  | "| \(.ruleId | esc) | \($sev) | \(loc | esc) | \($fix | esc) |"' trivy.sarif
+                  | (field("Severity") // .level) as $sev
+                  | (field("Fixed Version") // "-") as $fix
+                  | ((field("Package") // "-") + (field("Installed Version") | if . then "@" + . else "" end)) as $pkg
+                  | "| \(.ruleId | esc) | \($pkg | esc) | \($sev) | \(loc | esc) | \($fix | esc) |"' trivy.sarif
                 if [ "$n" -gt 20 ]; then echo; echo "Showing 20 of $n."; fi
               fi
             else

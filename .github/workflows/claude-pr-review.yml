@@ -8,9 +8,14 @@ on:
     # "labeled" lets you re-request a review on demand (see the job guard below).
     types: [opened, reopened, ready_for_review, synchronize, labeled]
 
-# Latest review wins if several events land close together.
+# Latest review wins if several events land close together. Label events for
+# any label other than claude:review get their own group, so adding a label
+# (e.g. hotfix, right after opening) cannot cancel a review that is running.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: >-
+    claude-review-${{ github.event.pull_request.number }}${{
+    github.event.action == 'labeled' && github.event.label.name != 'claude:review'
+    && format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
