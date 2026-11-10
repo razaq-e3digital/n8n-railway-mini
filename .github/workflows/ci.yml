@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Scripts parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Every script parses
+        run: for f in briefing/*.js exposure-radar/*.js; do node --check "$f"; done
+      - name: workflow.json is valid JSON
+        run: jq empty exposure-radar/workflow.json
+
+  # PRs into main must come from staging (the promotion flow) or carry the
+  # hotfix label. Everything else targets staging.
+  pr-target-guard:
+    name: pr-target-guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: PRs into main come from staging or carry the hotfix label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          read -r base head hotfix < <(gh pr view "$PR" \
+            --json baseRefName,headRefName,labels \
+            --jq '"\(.baseRefName) \(.headRefName) \([.labels[].name] | index("hotfix") != null)"')
+          if [ "$base" != "main" ]; then
+            echo "PR targets $base. OK."
+          elif [ "$head" = "staging" ]; then
+            echo "Release PR from staging into main. OK."
+          elif [ "$hotfix" = "true" ]; then
+            echo "::warning::Hotfix PR from $head straight into main."
+          else
+            echo "::error::PRs must target staging, not main. Change the base branch to staging (or add the hotfix label and re-run this job)."
+            exit 1
+          fi

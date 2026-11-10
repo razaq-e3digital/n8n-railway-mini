@@ -1,0 +1,200 @@
+name: Claude fix
+
+# Agentic fixes, on request only:
+#   - label a PR or an issue `claude:fix`, or
+#   - comment on a PR with a comment that starts "@claude fix".
+# Only the repository owner can trigger it, and it never runs for PRs from forks.
+#
+# On a PR: Claude reads the latest Claude review and the security scan result,
+# fixes the blocking findings on the PR branch, runs the fast checks, pushes
+# and comments with a summary.
+# On an issue: Claude branches from staging, fixes it and opens a PR into staging.
+#
+# Pushes use the Claude GitHub App token (the action swaps out the checkout
+# credential for it), not GITHUB_TOKEN, so CI, the security scan and the
+# review all run again on the new commits.
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  # Used by the monthly security scan, whose GITHUB_TOKEN-made issue cannot
+  # trigger the labeled event itself. Also handy to run by hand.
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Issue or PR number to fix
+        required: true
+
+concurrency:
+  group: claude-fix-${{ github.event.issue.number || github.event.pull_request.number || inputs.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+  checks: read
+
+env:
+  # The quick checks Claude runs before pushing: every script must parse.
+  FAST_CHECKS: for f in briefing/*.js exposure-radar/*.js; do node --check "$f" || exit 1; done
+
+jobs:
+  fix:
+    if: >
+      (github.event_name == 'workflow_dispatch' &&
+        (github.actor == github.repository_owner || github.actor == 'github-actions[bot]')) ||
+      (github.event_name != 'issue_comment' &&
+        github.event.label.name == 'claude:fix' &&
+        github.actor == github.repository_owner) ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '@claude fix') &&
+        github.event.comment.user.login == github.repository_owner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Work out what to fix
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || inputs.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if pr=$(gh pr view "$NUMBER" --json headRefName,headRefOid,isCrossRepository,state 2>/dev/null); then
+            if [ "$(jq -r .isCrossRepository <<<"$pr")" = "true" ]; then
+              echo "::error::#$NUMBER comes from a fork. claude-fix never runs on fork PRs."
+              exit 1
+            fi
+            if [ "$(jq -r .state <<<"$pr")" != "OPEN" ]; then
+              echo "::error::PR #$NUMBER is not open."
+              exit 1
+            fi
+            echo "kind=pr" >> "$GITHUB_OUTPUT"
+            echo "ref=$(jq -r .headRefName <<<"$pr")" >> "$GITHUB_OUTPUT"
+            echo "sha=$(jq -r .headRefOid <<<"$pr")" >> "$GITHUB_OUTPUT"
+          else
+            base=staging
+            gh api "repos/$GH_REPO/branches/staging" --silent 2>/dev/null || base="$DEFAULT_BRANCH"
+            echo "kind=issue" >> "$GITHUB_OUTPUT"
+            echo "ref=$base" >> "$GITHUB_OUTPUT"
+          fi
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # Gather the context Claude needs as small files, so it never has to
+      # read raw logs. Kept out of commits via .git/info/exclude.
+      - name: Collect the task, review and security scan result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KIND: ${{ steps.target.outputs.kind }}
+          NUMBER: ${{ steps.target.outputs.number }}
+          REF: ${{ steps.target.outputs.ref }}
+          HEAD_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -uo pipefail
+          mkdir -p .claude-context
+          echo ".claude-context/" >> .git/info/exclude
+
+          if [ "$KIND" = "issue" ]; then
+            gh issue view "$NUMBER" --json title,body --jq '"# \(.title)\n\n\(.body)"' > .claude-context/issue.md
+            cat > .claude-context/task.md <<EOF
+          Read .claude-context/issue.md (issue #$NUMBER). You are on $REF.
+          Create a branch named claude/fix-issue-$NUMBER, fix the issue, run the fast
+          checks, commit with conventional commit messages (lowercase subject), push
+          the branch, and open a PR into $REF with: gh pr create --base $REF
+          The PR body says what changed, how it was tested, anything left open, and
+          "Fixes #$NUMBER".
+          EOF
+            exit 0
+          fi
+
+          cat > .claude-context/task.md <<EOF
+          You are on the branch of PR #$NUMBER ($REF).
+          Read .claude-context/claude-review.md (the latest Claude review) and
+          .claude-context/security-result.md (the security scan summary). Fix every
+          Must fix finding and every security finding this PR introduced. Fix Should
+          fix findings when they are small and in scope. Run the fast checks, commit
+          with conventional commit messages (lowercase subject), then push with:
+          git push origin HEAD:$REF
+          Finally post one comment with: gh pr comment $NUMBER
+          saying what you changed, what you left and why.
+          EOF
+
+          # Latest review summary, plus inline review comments still on the diff.
+          gh pr view "$NUMBER" --json comments \
+            --jq '[.comments[] | select(.body | startswith("Recommendation:"))] | last | .body // "No Claude review summary found."' \
+            > .claude-context/claude-review.md
+          {
+            echo
+            echo "## Inline review comments"
+            gh api "repos/$GH_REPO/pulls/$NUMBER/comments" --paginate \
+              --jq '.[] | select(.user.login == "claude[bot]" and .position != null) | "- \(.path):\(.line // .original_line): \(.body)"'
+          } >> .claude-context/claude-review.md
+
+          # Security scan result for the head commit: the summary only.
+          run_id=$(gh run list --workflow security-scan.yml --commit "$HEAD_SHA" --status completed --limit 1 \
+            --json databaseId --jq 'first | .databaseId // empty' 2>/dev/null || true)
+          if [ -n "$run_id" ] && gh run download "$run_id" -n security-scan -D "$RUNNER_TEMP/security-scan" 2>/dev/null; then
+            verdict=$(gh run view "$run_id" --json conclusion --jq 'if .conclusion == "success" then "PASS" else "FAIL" end')
+            printf 'Security scan: %s\n\n%s\n' "$verdict" "$(cat "$RUNNER_TEMP/security-scan/security-summary.md")" \
+              > .claude-context/security-result.md
+          else
+            echo "Security scan: NOT AVAILABLE (no finished run for $HEAD_SHA)" > .claude-context/security-result.md
+          fi
+
+      - name: Claude fix
+        id: claude
+        uses: anthropics/claude-code-action@4fa93a88de49bbef68b10eb15aabedf28ca0e1ed # v1.0.271
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The monthly security scan's workflow_dispatch arrives as github-actions[bot].
+          allowed_bots: github-actions
+          # ADJUST PER REPO: add the commands FAST_CHECKS uses if they are not listed.
+          claude_args: |
+            --model claude-sonnet-5-5
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(git:*),Bash(gh pr comment:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh issue comment:*),Bash(node --check:*)"
+          prompt: |
+            You are fixing #${{ steps.target.outputs.number }} in ${{ github.repository }}.
+            Read .claude-context/task.md and do what it says.
+            The fast checks for this repo are: ${{ env.FAST_CHECKS }}
+
+            Rules:
+            - Never weaken a check to get green: do not disable, skip or delete tests,
+              do not loosen lint or type settings, do not delete scanner rules, and do
+              not add .semgrepignore or .trivyignore entries unless you also write the
+              reason as a comment in that file and in the PR comment or body.
+            - Keep the change to what the findings or issue need. No unrelated refactors.
+            - Never commit anything under .claude-context/.
+            - If the fast checks fail for reasons unrelated to your change, say so in
+              your comment rather than working around them.
+            - If something cannot be fixed safely, leave it and explain why.
+            - Write in British English and do not use em dashes or en dashes.
+
+      - name: Remove the claude:fix label
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.target.outputs.number }}
+        run: |
+          [ -n "$NUMBER" ] || exit 0
+          gh issue edit "$NUMBER" --remove-label "claude:fix" 2>/dev/null || true

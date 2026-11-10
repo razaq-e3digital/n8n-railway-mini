@@ -1,0 +1,106 @@
+name: Promote to production
+
+# Release flow:
+#
+#   feature branch ──PR──▶ staging ──(staging deploy succeeds)──▶ main ──▶ production
+#
+# Railway project "n8n-mini": the n8n service's staging environment deploys
+# the `staging` branch and its production environment deploys `main`. Nobody merges into main by hand:
+# when Railway reports a successful staging deployment to GitHub, this
+# workflow fast-forwards main to exactly that commit, and Railway then
+# builds the same commit for production.
+#
+# deployment_status workflows always run from the default branch (main), so
+# this file must live on main.
+#
+# ADJUST PER REPO:
+#   - The 'staging' in contains(...) below: a substring of the GitHub
+#     environment name the host reports for staging. Railway uses "<Project name> / <environment>",
+#     e.g. "Track That Ride / staging". contains() is case-insensitive.
+#   - Branch rules: if main (or staging) has a ruleset that blocks direct
+#     pushes, add a deploy key with write access, list it as a ruleset bypass
+#     actor, and store its private key as the PROMOTE_DEPLOY_KEY secret.
+#     Without that secret the jobs push with GITHUB_TOKEN.
+
+on:
+  # The host posts a GitHub deployment status for every deployment.
+  deployment_status:
+  # Keeps staging from falling behind if something is merged straight into
+  # main (a hotfix). Pushes made with GITHUB_TOKEN do not re-trigger it.
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-to-production
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Fast-forward main to the deployed staging commit
+    if: >
+      github.event_name == 'deployment_status' &&
+      github.event.deployment_status.state == 'success' &&
+      contains(github.event.deployment.environment, 'staging')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # Empty unless a deploy key is configured; then pushes use it.
+          ssh-key: ${{ secrets.PROMOTE_DEPLOY_KEY }}
+
+      - name: Fast-forward main
+        env:
+          SHA: ${{ github.event.deployment.sha }}
+          ENVIRONMENT: ${{ github.event.deployment.environment }}
+        run: |
+          set -euo pipefail
+          echo "The host reported a successful deployment of $SHA to '$ENVIRONMENT'."
+          git fetch origin main staging
+
+          if ! git merge-base --is-ancestor "$SHA" origin/staging; then
+            echo "::warning::$SHA is not on the staging branch; not promoting."
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "main already contains $SHA; nothing to promote."
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor origin/main "$SHA"; then
+            echo "::error::main has commits that $SHA does not contain, so main cannot be fast-forwarded. Merge main into staging, let staging deploy, and the next successful staging deploy will promote."
+            exit 1
+          fi
+
+          git push origin "$SHA:refs/heads/main"
+          echo "Promoted $SHA to main; production will now deploy it." >> "$GITHUB_STEP_SUMMARY"
+
+  sync-staging:
+    name: Bring staging up to date with main
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: staging
+          fetch-depth: 0
+          ssh-key: ${{ secrets.PROMOTE_DEPLOY_KEY }}
+
+      - name: Merge main into staging
+        run: |
+          set -euo pipefail
+          git fetch origin main staging
+          if git merge-base --is-ancestor origin/main origin/staging; then
+            echo "staging already contains main."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          # Fast-forwards when staging has nothing main lacks; otherwise makes a
+          # merge commit. A conflict fails the job so a person can resolve it.
+          git merge --no-edit origin/main
+          git push origin HEAD:refs/heads/staging

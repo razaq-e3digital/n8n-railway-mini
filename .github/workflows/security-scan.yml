@@ -1,0 +1,201 @@
+name: Security scan
+
+# Free, self-contained security scan: Semgrep (community rules) and Trivy.
+# Results stay inside Actions (job summary + artifact). Nothing is uploaded
+# to GitHub code scanning, so no GitHub Advanced Security is needed.
+#
+# The Claude PR review waits for this job, downloads the security-scan
+# artifact and reads security-summary.md from it, so keep the job name,
+# artifact name and file name as they are.
+#
+# Ignores: .semgrepignore and .trivyignore in the repo root are honoured.
+# Every entry in them must have a comment saying why (enforced below).
+
+on:
+  pull_request:
+  workflow_dispatch:
+  # Monthly full scan of the default branch; opens or updates an issue if it
+  # finds anything. Scheduled runs always use the default branch.
+  schedule:
+    - cron: "17 6 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned scanner versions. Update both together with their digests/checksums.
+  SEMGREP_IMAGE: semgrep/semgrep:1.184.0@sha256:cc1b68266f267878b39739373ea9985b9a78e5d64497dd875c8de100b22695ed
+  TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+
+jobs:
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Only used on the monthly run, to open or update the findings issue
+      # and to start claude-fix for it.
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every ignore entry has a reason
+        run: |
+          set -euo pipefail
+          status=0
+          for f in .semgrepignore .trivyignore; do
+            [ -f "$f" ] || continue
+            # An entry passes if it has a trailing comment or the line above
+            # it is a comment.
+            awk -v f="$f" '
+              /^[[:space:]]*$/ { prev = ""; next }
+              /^[[:space:]]*#/ { prev = "comment"; next }
+              {
+                if ($0 !~ /#/ && prev != "comment") {
+                  printf "::error file=%s,line=%d::Ignore entry has no comment explaining why: %s\n", f, NR, $0
+                  bad = 1
+                }
+                prev = "entry"
+              }
+              END { exit bad }
+            ' "$f" || status=1
+          done
+          exit $status
+
+      # Trivy runs first so its secret scanner never reads semgrep.sarif.
+      - name: Trivy (dependencies, secrets, misconfiguration)
+        id: trivy
+        if: always()
+        run: |
+          set -euo pipefail
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/trivy.tgz" "$url"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+          "$RUNNER_TEMP/trivy" fs . --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
+            --ignore-unfixed --format sarif --output trivy.sarif --exit-code 1
+
+      - name: Semgrep (community rules)
+        id: semgrep
+        if: always()
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --config p/default --severity ERROR --sarif --output semgrep.sarif --error
+
+      - name: Summarise findings
+        if: always()
+        env:
+          SEMGREP_OUTCOME: ${{ steps.semgrep.outcome }}
+          TRIVY_OUTCOME: ${{ steps.trivy.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Table helpers: escape pipes and newlines so a finding cannot break the table.
+          defs='def esc: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+                def loc: "\(.locations[0].physicalLocation.artifactLocation.uri // "?"):\(.locations[0].physicalLocation.region.startLine // "?")";'
+
+          if [ "$SEMGREP_OUTCOME" = "success" ] && [ "$TRIVY_OUTCOME" = "success" ]; then
+            result=PASS
+          else
+            result=FAIL
+          fi
+
+          {
+            echo "## Security scan: $result"
+            echo
+            echo "Semgrep: $SEMGREP_OUTCOME. Trivy: $TRIVY_OUTCOME. Run: $RUN_URL"
+            echo
+
+            echo "### Semgrep"
+            if [ -s semgrep.sarif ]; then
+              # Results suppressed in source (nosemgrep) are in the SARIF but do not fail the scan.
+              n=$(jq '[.runs[].results[] | select((.suppressions // []) | length == 0)] | length' semgrep.sarif)
+              echo "$n finding(s) at severity ERROR."
+              if [ "$n" -gt 0 ]; then
+                echo
+                echo "| Rule | Severity | Location |"
+                echo "|---|---|---|"
+                jq -r "$defs"'
+                  [.runs[].results[] | select((.suppressions // []) | length == 0)][:20][]
+                  | "| \(.ruleId | esc) | \(.level // "error") | \(loc | esc) |"' semgrep.sarif
+                if [ "$n" -gt 20 ]; then echo; echo "Showing 20 of $n."; fi
+              fi
+            else
+              echo "No SARIF output: Semgrep did not finish. See the run log."
+            fi
+            echo
+
+            echo "### Trivy"
+            if [ -s trivy.sarif ]; then
+              n=$(jq '[.runs[].results[]] | length' trivy.sarif)
+              echo "$n finding(s) at HIGH or CRITICAL (unfixed vulnerabilities excluded)."
+              if [ "$n" -gt 0 ]; then
+                echo
+                echo "| Rule / CVE | Package | Severity | Location | Fixed version |"
+                echo "|---|---|---|---|---|"
+                jq -r "$defs"'
+                  def field($name): (try (.message.text | capture($name + ": (?<v>[^\n]+)").v) catch null);
+                  [.runs[].results[]][:20][]
+                  | (field("Severity") // .level) as $sev
+                  | (field("Fixed Version") // "-") as $fix
+                  | ((field("Package") // "-") + (field("Installed Version") | if . then "@" + . else "" end)) as $pkg
+                  | "| \(.ruleId | esc) | \($pkg | esc) | \($sev) | \(loc | esc) | \($fix | esc) |"' trivy.sarif
+                if [ "$n" -gt 20 ]; then echo; echo "Showing 20 of $n."; fi
+              fi
+            else
+              echo "No SARIF output: Trivy did not finish. See the run log."
+            fi
+          } > security-summary.md
+
+          cat security-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-scan
+          path: |
+            security-summary.md
+            semgrep.sarif
+            trivy.sarif
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Monthly run only. Issues and labels made with GITHUB_TOKEN do not
+      # trigger other workflows, so claude-fix is started explicitly with
+      # workflow_dispatch (which GITHUB_TOKEN is allowed to do).
+      - name: Open or update the findings issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: "Security scan: findings on ${{ github.event.repository.default_branch }}"
+        run: |
+          set -euo pipefail
+          gh label create security --color b60205 --description "Security finding" 2>/dev/null || true
+          gh label create "claude:fix" --color 1d76db --description "Ask Claude to fix this" 2>/dev/null || true
+          [ -s security-summary.md ] || echo "The scan failed before it produced a summary." > security-summary.md
+
+          number=$(gh issue list --state open --label security --limit 100 --json number,title \
+            --jq "map(select(.title == env.TITLE))[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file security-summary.md --add-label "security,claude:fix"
+            echo "Updated issue #$number."
+          else
+            url=$(gh issue create --title "$TITLE" --label security --label "claude:fix" --body-file security-summary.md)
+            number="${url##*/}"
+            echo "Opened issue #$number."
+          fi
+
+          if [ -f .github/workflows/claude-fix.yml ]; then
+            gh workflow run claude-fix.yml -f number="$number" || echo "::warning::Could not start claude-fix for #$number."
+          fi
