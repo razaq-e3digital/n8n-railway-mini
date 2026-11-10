@@ -42,8 +42,13 @@ then work through the steps. Stop at every STOP marker and hand back to the huma
 The repo root contains a `Dockerfile` with only:
 ```dockerfile
 FROM n8nio/n8n:2.31.7
+
+# The base image already runs as node. Declaring it explicitly keeps the
+# container non-root and clears Trivy DS-0002. Keep this as the last line.
+USER node
 ```
-That is the whole build. Do not add secrets here.
+That is the whole build. `USER node` matches the base image's own user and
+keeps the container non-root; keep it as the last line. Do not add secrets here.
 
 ### 2. Authenticate the Railway CLI
 The CLI skips interactive login when a token env var is set. Confirm `RAILWAY_API_TOKEN`
