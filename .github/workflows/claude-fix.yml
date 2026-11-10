@@ -48,7 +48,8 @@ env:
 jobs:
   fix:
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.actor == github.repository_owner || github.actor == 'github-actions[bot]')) ||
       (github.event_name != 'issue_comment' &&
         github.event.label.name == 'claude:fix' &&
         github.actor == github.repository_owner) ||
